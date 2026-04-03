@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ShieldAlert, ArrowRight, BrainCircuit } from 'lucide-react';
+import { ShieldAlert, ArrowRight, BrainCircuit, Undo2 } from 'lucide-react';
 
 const TriageRunner = () => {
     const { id: protocolId } = useParams();
@@ -9,6 +9,7 @@ const TriageRunner = () => {
 
     // State
     const [sessionId, setSessionId] = useState(null);
+    const [session, setSession] = useState(null);
     const [currentNode, setCurrentNode] = useState(null);
     const [inputValue, setInputValue] = useState('');
     const [isComplete, setIsComplete] = useState(false);
@@ -34,6 +35,7 @@ const TriageRunner = () => {
                 });
 
                 setSessionId(sessionData.session._id);
+                setSession(sessionData.session);
                 setCurrentNode(sessionData.nextNode);
                 setLoading(false);
             } catch (err) {
@@ -45,9 +47,34 @@ const TriageRunner = () => {
         if (protocolId) initSession();
     }, [protocolId]);
 
+    const isValidInput = (val) => {
+        if (!val.trim()) return null;
+        if (!currentNode) return false;
+
+        const v = val.trim().toLowerCase();
+
+        // If the node has explicit numeric edges (e.g. >38), or doctor set type to number
+        if (currentNode.inputType === 'number') {
+            return !isNaN(parseFloat(v)) && isFinite(v);
+        }
+
+        // If the node has explicit choices configured via edges
+        if (currentNode.expectedOptions && currentNode.expectedOptions.length > 0) {
+            return currentNode.expectedOptions.some(opt => opt.toLowerCase() === v);
+        }
+
+        // Otherwise fallback to inputType boolean
+        if (currentNode.inputType === 'boolean') {
+            return v === 'yes' || v === 'no';
+        }
+
+        // For text or choice without specific expected options
+        return true;
+    };
+
     const submitResponse = async (e) => {
         e.preventDefault();
-        if (!inputValue.trim()) return;
+        if (isValidInput(inputValue) !== true) return;
 
         setLoading(true);
         setError('');
@@ -61,12 +88,32 @@ const TriageRunner = () => {
             if (data.isComplete || data.defaultPriorityAssigned) {
                 setIsComplete(true);
                 setFinalResult(data);
+                setSession(data.session);
             } else {
                 setCurrentNode(data.nextNode);
+                setSession(data.session);
                 setInputValue(''); // Reset input for next node
             }
         } catch (err) {
             setError(err.response?.data?.error || 'Failed to submit response');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleGoBack = async () => {
+        if (!session || !session.responses || session.responses.length === 0) return;
+        setLoading(true);
+        setError('');
+        try {
+            const { data } = await api.post(`/triage/sessions/${sessionId}/back`);
+            setSession(data.session);
+            setCurrentNode(data.nextNode);
+            setIsComplete(false);
+            setFinalResult(null);
+            setInputValue(''); // Reset input
+        } catch (err) {
+            setError(err.response?.data?.error || 'Failed to go back');
         } finally {
             setLoading(false);
         }
@@ -92,87 +139,156 @@ const TriageRunner = () => {
     }
 
     if (isComplete) {
-        const priorityColor =
-            finalResult.session.finalPriority === 'Emergency' ? 'bg-red-600' :
-                finalResult.session.finalPriority === 'High' ? 'bg-orange-500' :
-                    finalResult.session.finalPriority === 'Medium' ? 'bg-yellow-500' : 'bg-green-500';
+        let styleTheme = {};
+        switch (finalResult.session.finalPriority) {
+            case 'Emergency': styleTheme = { bg: 'from-red-600 to-red-500', icon: 'text-red-600', border: 'border-red-500' }; break;
+            case 'High': styleTheme = { bg: 'from-orange-500 to-orange-400', icon: 'text-orange-500', border: 'border-orange-500' }; break;
+            case 'Medium': styleTheme = { bg: 'from-yellow-500 to-yellow-400', icon: 'text-yellow-500', border: 'border-yellow-500' }; break;
+            default: styleTheme = { bg: 'from-green-500 to-green-400', icon: 'text-green-500', border: 'border-green-500' }; break;
+        }
 
         return (
-            <div className="max-w-2xl mx-auto p-8">
-                <div className="bg-white border border-slate-200 rounded-xl shadow-sm text-center p-12">
-                    <div className={`w-24 h-24 mx-auto rounded-full flex items-center justify-center text-white mb-6 shadow-lg ${priorityColor}`}>
-                        <ShieldAlert size={48} />
-                    </div>
-                    <h2 className="text-3xl font-bold text-slate-900 mb-2">Triage Complete</h2>
-                    <p className="text-slate-600 mb-8">The Recommended Acuity Level is:</p>
-                    <div className={`inline-block px-8 py-3 rounded-full text-white font-bold text-2xl tracking-wider uppercase ${priorityColor}`}>
-                        {finalResult.session.finalPriority}
+            <div className="min-h-[calc(100vh-80px)] w-full flex items-center justify-center p-4 sm:p-8 relative">
+                {/* Background glow effect based on priority */}
+                <div className={`absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[80vw] h-[80vw] max-w-2xl max-h-2xl rounded-full blur-[120px] opacity-10 bg-gradient-to-r ${styleTheme.bg} pointer-events-none`}></div>
+
+                <div className={`max-w-2xl w-full bg-white/90 backdrop-blur-md rounded-3xl shadow-2xl overflow-hidden flex flex-col items-center justify-center p-16 border-t-[12px] ${styleTheme.border} transition-all duration-700 hover:shadow-3xl transform hover:-translate-y-1`}>
+                    <div className="relative mb-10 mt-4 group">
+                        <div className={`absolute inset-0 bg-gradient-to-tr ${styleTheme.bg} opacity-20 rounded-full blur-2xl group-hover:blur-3xl transition-all duration-500 animate-pulse`}></div>
+                        <div className={`w-36 h-36 relative bg-white border border-slate-100 flex items-center justify-center rounded-[2.5rem] shadow-xl transform rotate-3 transition-transform duration-500 group-hover:rotate-6`}>
+                            <ShieldAlert size={72} strokeWidth={1.5} className={styleTheme.icon} />
+                        </div>
                     </div>
 
-                    <div className="mt-12 text-sm text-slate-500">
-                        Total Compute Score: {finalResult.session.totalScore}
+                    <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 mb-3 tracking-tight text-center">Triage Complete</h2>
+                    <p className="text-slate-500 text-lg md:text-xl mb-12 font-medium">System Recommendation Acuity Level</p>
+
+                    <div className={`px-14 py-5 rounded-2xl text-white font-black text-4xl md:text-5xl tracking-widest uppercase shadow-xl bg-gradient-to-r ${styleTheme.bg} transform hover:scale-105 transition-transform duration-300`}>
+                        {finalResult.session.finalPriority || "PENDING"}
+                    </div>
+
+                    {finalResult.terminalNode?.content && (
+                        <div className="mt-12 w-full max-w-lg">
+                            <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-3 pl-2">Doctor's Orders / Next Steps</h3>
+                            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 shadow-sm">
+                                <p className="text-lg md:text-xl font-medium text-slate-800 leading-relaxed">
+                                    {finalResult.terminalNode.content}
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="mt-12 mb-6 bg-slate-100/50 px-8 py-4 rounded-full border border-slate-200 flex items-center space-x-3 backdrop-blur-sm">
+                        <BrainCircuit size={20} className="text-slate-400" />
+                        <span className="text-sm md:text-base font-semibold text-slate-600 tracking-wide uppercase">Compute Score: <span className="text-slate-900 font-bold ml-2 text-lg">{finalResult.session.totalScore}</span></span>
                     </div>
 
                     <button
                         onClick={() => navigate('/dashboard/protocols')}
-                        className="mt-8 text-teal-600 hover:text-teal-800 font-medium underline"
+                        className="mt-6 text-slate-500 hover:text-slate-900 font-bold tracking-widest uppercase text-sm border-b-2 border-transparent hover:border-slate-900 transition-colors pb-1 flex items-center group"
                     >
-                        Return to Protocol List
+                        <ArrowRight size={18} className="mr-3 rotate-180 transform group-hover:-translate-x-1 transition-transform" /> Return to Dashboard
                     </button>
+
+                    {session?.responses?.length > 0 && (
+                        <button
+                            onClick={handleGoBack}
+                            disabled={loading}
+                            className="mt-6 text-teal-600 hover:text-teal-800 font-bold tracking-widest text-sm flex items-center group transition-colors px-6 py-2 bg-teal-50 rounded-full hover:bg-teal-100"
+                        >
+                            <Undo2 size={16} className="mr-2 transform group-hover:-translate-x-1 transition-transform" /> Re-evaluate Last Answer
+                        </button>
+                    )}
                 </div>
             </div>
         );
     }
 
     return (
-        <div className="max-w-2xl mx-auto p-4 sm:p-8">
-            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col min-h-[400px]">
+        <div className="min-h-[calc(100vh-80px)] w-full flex items-center justify-center p-4 sm:p-8 relative">
+            {/* Ambient Background Glow */}
+            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[80vw] h-[80vw] max-w-3xl max-h-3xl rounded-full blur-[100px] opacity-[0.03] bg-teal-500 pointer-events-none"></div>
+
+            <div className="max-w-3xl w-full bg-white rounded-[2rem] shadow-2xl overflow-hidden flex flex-col min-h-[550px] border border-slate-100 transition-all duration-300 transform relative z-10">
                 {/* Header */}
-                <div className="bg-teal-600 p-6 text-white flex items-center">
-                    <BrainCircuit size={28} className="mr-3 opacity-80" />
-                    <div>
-                        <h2 className="text-xl font-semibold">Active Triage Evaluation</h2>
-                        <p className="text-teal-100 text-sm">Follow the system prompts below.</p>
+                <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-8 text-white flex items-center justify-between border-b border-white/10 shadow-lg relative overflow-hidden">
+                    <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5"></div>
+                    <div className="flex items-center relative z-10">
+                        <div className="bg-white/10 p-3 rounded-2xl mr-4 backdrop-blur-md shadow-sm border border-white/20">
+                            <BrainCircuit size={32} className="text-teal-300" />
+                        </div>
+                        <div>
+                            <h2 className="text-2xl font-bold tracking-tight">Active Evaluation</h2>
+                            <p className="text-slate-300 text-sm mt-1 font-medium tracking-wide opacity-90"><span className="w-1.5 h-1.5 rounded-full bg-teal-400 inline-block mr-2 animate-pulse"></span>Protocol AI Triage System</p>
+                        </div>
                     </div>
+
+                    {session?.responses?.length > 0 && (
+                        <button
+                            onClick={handleGoBack}
+                            disabled={loading}
+                            className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg backdrop-blur-md shadow-sm border border-white/20 font-bold text-sm transition-colors relative z-10 disabled:opacity-50"
+                        >
+                            <Undo2 size={18} /> <span>Go Back</span>
+                        </button>
+                    )}
                 </div>
 
                 {/* Node Area */}
-                <div className="flex-1 p-8 flex flex-col justify-center">
-                    <div className="mb-8">
-                        <span className="inline-block px-3 py-1 rounded-full bg-slate-100 text-slate-500 text-xs font-semibold uppercase tracking-wider mb-4 border border-slate-200">
+                <div className="flex-1 p-10 md:p-14 flex flex-col justify-center relative bg-slate-50/50">
+                    <div className="mb-14">
+                        <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-teal-100 text-teal-800 text-xs font-bold uppercase tracking-widest mb-6 border border-teal-200 shadow-sm transition-all duration-300 cursor-default hover:bg-teal-200">
+                            <div className="w-1.5 h-1.5 rounded-full bg-teal-600 mr-2"></div>
                             {currentNode?.type} Check
                         </span>
-                        <h3 className="text-2xl font-bold text-slate-800 leading-snug">
+                        <h3 className="text-6xl md:text-7xl font-extrabold text-slate-800 leading-tight tracking-tight selection:bg-teal-200">
                             {currentNode?.content}
                         </h3>
                     </div>
 
-                    <form onSubmit={submitResponse} className="mt-auto">
-                        <label className="block text-sm font-medium text-slate-700 mb-2">
-                            Assessment Value / Input
+                    <form onSubmit={submitResponse} className="mt-auto pt-8 border-t border-slate-200/60 mt-8">
+                        <label className="block text-sm font-bold text-slate-500 mb-4 uppercase tracking-wider pl-1">
+                            Patient Assessment Input
                         </label>
-                        <div className="flex shadow-sm rounded-md">
+                        <div className="flex shadow-lg rounded-2xl hover:shadow-xl transition-shadow duration-300 group bg-white">
                             <input
                                 type="text"
                                 autoFocus
                                 value={inputValue}
                                 onChange={(e) => setInputValue(e.target.value)}
-                                placeholder="e.g., Yes, No, 38.5, Normal..."
-                                className="flex-1 min-w-0 block w-full px-4 py-3 rounded-none rounded-l-md border border-slate-300 focus:ring-teal-500 focus:border-teal-500 text-lg transition-colors"
+                                placeholder="e.g. Yes, No, 38.5..."
+                                className={`flex-1 w-full px-6 py-5 rounded-l-2xl border-y border-l focus:ring-0 focus:outline-none text-2xl md:text-3xl transition-colors ${isValidInput(inputValue) === null
+                                    ? 'border-slate-200 bg-white text-slate-800 focus:border-slate-400 placeholder-slate-300'
+                                    : isValidInput(inputValue) === true
+                                        ? 'border-green-400 bg-green-50 text-green-900 font-medium'
+                                        : 'border-red-400 bg-red-50 text-red-900 font-medium'
+                                    }`}
                                 disabled={loading}
                             />
                             <button
                                 type="submit"
-                                disabled={loading || !inputValue.trim()}
-                                className="inline-flex items-center px-6 py-3 border border-transparent border-l-0 text-base font-medium rounded-r-md text-white bg-slate-800 hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-900 transition-colors disabled:opacity-50"
+                                disabled={loading || isValidInput(inputValue) !== true}
+                                className="inline-flex items-center justify-center px-10 border border-transparent text-xl font-bold text-white bg-slate-900 hover:bg-teal-600 focus:outline-none transition-all duration-300 rounded-r-2xl disabled:opacity-50 disabled:bg-slate-300 disabled:cursor-not-allowed group-hover:disabled:bg-slate-300 shadow-inner"
                             >
                                 {loading ? 'Processing...' : (
-                                    <>Next <ArrowRight className="ml-2" size={18} /></>
+                                    <>Next <ArrowRight className="ml-3" strokeWidth={2.5} size={24} /></>
                                 )}
                             </button>
                         </div>
-                        <p className="mt-3 text-xs text-slate-400">
-                            * Input must exactly match configuration logic for MVP (case-insensitive).
+                        {isValidInput(inputValue) === false && (
+                            <div className="mt-5 p-3.5 bg-red-50 rounded-xl border border-red-200 inline-flex items-center text-sm text-red-700 font-bold shadow-sm animate-pulse">
+                                <ShieldAlert size={18} className="mr-2" strokeWidth={2.5} /> Invalid input. Expected:&nbsp;
+                                {currentNode?.inputType === 'number'
+                                    ? 'A valid number.'
+                                    : currentNode?.expectedOptions?.length > 0
+                                        ? `'${currentNode.expectedOptions.join("' or '")}'`
+                                        : currentNode?.inputType === 'boolean'
+                                            ? "'Yes' or 'No'"
+                                            : 'Valid text.'}
+                            </div>
+                        )}
+                        <p className="mt-6 text-xs text-slate-400 font-medium tracking-wide pl-1">
+                            <span className="text-teal-500 font-bold mr-1">*</span> Input validates against Protocol Builder rules: {currentNode?.inputType?.toUpperCase() || 'TEXT'}.
                         </p>
                     </form>
                 </div>
