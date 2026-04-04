@@ -1,28 +1,62 @@
 import React, { useEffect, useState } from 'react';
 import api from '../services/api';
 import { useAuthStore } from '../store/authStore';
-import { Plus, Edit2, Play, Users, Search, Trash2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Edit2, Play, Users, Search, Trash2, WifiOff, CloudUpload } from 'lucide-react';
+import { useSync } from '../hooks/useSync';
+import { saveProtocolsLocally, getLocalProtocols } from '../services/db';
 
 const ProtocolsList = () => {
     const [protocols, setProtocols] = useState([]);
     const [searchQuery, setSearchQuery] = useState('');
     const [loading, setLoading] = useState(true);
     const { user } = useAuthStore();
+    const { isOnline, isSyncing, pendingCount, syncNow } = useSync();
+    const navigate = useNavigate();
 
     useEffect(() => {
         const fetchProtocols = async () => {
             try {
-                const { data } = await api.get('/protocols');
-                setProtocols(data);
+                if (isOnline) {
+                    const { data } = await api.get('/protocols');
+                    setProtocols(data);
+
+                    // Fetch full protocol details for reliable offline caching
+                    const fullProtocols = await Promise.all(
+                        data.map(async (p) => {
+                            try {
+                                const { data: full } = await api.get(`/protocols/${p._id}`);
+                                return {
+                                    ...p,
+                                    versionId: full.activeVersion?._id,
+                                    versionNumber: full.activeVersion?.versionNumber,
+                                    nodes: full.activeVersion?.nodes || [],
+                                    branchRules: full.activeVersion?.branchRules || []
+                                };
+                            } catch (err) {
+                                return p; // Fallback to summary if detail fetch fails
+                            }
+                        })
+                    );
+                    await saveProtocolsLocally(fullProtocols);
+                } else {
+                    // Load from IndexedDB if offline
+                    const localData = await getLocalProtocols();
+                    setProtocols(localData || []);
+                }
             } catch (error) {
                 console.error("Failed to fetch protocols", error);
+                if (!isOnline) {
+                    const localData = await getLocalProtocols();
+                    setProtocols(localData || []);
+                }
             } finally {
                 setLoading(false);
             }
         };
 
         fetchProtocols();
-    }, []);
+    }, [isOnline]);
 
     const createNewProtocol = async () => {
         const name = prompt("Enter a name for the new Protocol:");
@@ -34,7 +68,8 @@ const ProtocolsList = () => {
                 description: "New protocol pending builder configuration"
             });
             // Automatically navigate to builder 
-            window.location.href = `/dashboard/build/${data._id}`;
+            // Navigate client-side — no full reload, works offline
+            navigate(`/dashboard/build/${data._id}`);
         } catch (error) {
             alert("Failed to create protocol");
         }
@@ -63,6 +98,32 @@ const ProtocolsList = () => {
 
     return (
         <div className="space-y-6">
+            {/* Offline & Sync Status Banner */}
+            {(!isOnline || pendingCount > 0) && (
+                <div className={`p-4 rounded-xl flex items-center justify-between shadow-sm border ${!isOnline ? 'bg-orange-50 border-orange-200 text-orange-800' : 'bg-blue-50 border-blue-200 text-blue-800'}`}>
+                    <div className="flex items-center">
+                        {!isOnline ? <WifiOff className="mr-3" /> : <CloudUpload className="mr-3" />}
+                        <div>
+                            <h3 className="font-bold">{!isOnline ? "You are currently offline" : "Online - Sync Pending"}</h3>
+                            <p className="text-sm">
+                                {!isOnline
+                                    ? `Showing ${protocols.length} cached protocols. You can still run triage. (${pendingCount} sessions waiting to sync)`
+                                    : `${pendingCount} triage sessions are waiting to be uploaded.`}
+                            </p>
+                        </div>
+                    </div>
+                    {isOnline && pendingCount > 0 && (
+                        <button
+                            onClick={syncNow}
+                            disabled={isSyncing}
+                            className={`px-4 py-2 font-bold text-white rounded-lg shadow-sm transition-all ${isSyncing ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                        >
+                            {isSyncing ? 'Syncing...' : 'Sync Now'}
+                        </button>
+                    )}
+                </div>
+            )}
+
             <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-semibold text-slate-800">
                     {user?.role === 'doctor' ? 'Clinical Protocols Master List' : ''}
@@ -129,7 +190,7 @@ const ProtocolsList = () => {
                             {user?.role === 'doctor' ? (
                                 <div className="flex space-x-1">
                                     <button
-                                        onClick={() => window.location.href = `/dashboard/build/${protocol._id}`}
+                                        onClick={() => navigate(`/dashboard/build/${protocol._id}`)}
                                         className="text-teal-600 hover:text-teal-800 p-2 hover:bg-teal-50 rounded-full transition-colors"
                                         title="Edit Logic"
                                     >
@@ -145,7 +206,7 @@ const ProtocolsList = () => {
                                 </div>
                             ) : (
                                 <button
-                                    onClick={() => window.location.href = `/dashboard/run/${protocol._id}`}
+                                    onClick={() => navigate(`/dashboard/run/${protocol._id}`)}
                                     className="text-blue-600 hover:text-blue-800 flex items-center text-sm font-medium px-3 py-1 bg-blue-50 rounded-full hover:bg-blue-100 transition-colors"
                                 >
                                     <Play size={14} className="mr-1" /> Run

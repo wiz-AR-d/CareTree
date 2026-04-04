@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ShieldAlert, ArrowRight, BrainCircuit, Undo2 } from 'lucide-react';
+import { ShieldAlert, ArrowRight, BrainCircuit, Undo2, WifiOff } from 'lucide-react';
+import { useSync } from '../hooks/useSync';
+import { getLocalProtocolById, addToSyncQueue } from '../services/db';
 
 const TriageRunner = () => {
     const { id: protocolId } = useParams();
@@ -17,35 +19,96 @@ const TriageRunner = () => {
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(true);
 
+    const { isOnline, updatePendingCount } = useSync();
+
+    // --- Front-end offline decision engine exact match from backend ---
+    const getNextNodeLocally = (protocol, currentNodeId, responseValue) => {
+        const rules = protocol.branchRules.filter((rule) => rule.nodeId === currentNodeId);
+        let nextNodeId = null;
+
+        for (const rule of rules) {
+            if (String(rule.conditionValue).toLowerCase() === String(responseValue).toLowerCase()) {
+                nextNodeId = rule.nextNodeId;
+                break;
+            }
+        }
+        if (!nextNodeId) {
+            const defaultRule = rules.find((rule) => rule.conditionValue === '*');
+            if (defaultRule) nextNodeId = defaultRule.nextNodeId;
+        }
+
+        if (!nextNodeId) return null;
+
+        const nextNode = protocol.nodes.find((node) => node.nodeId === nextNodeId) || null;
+
+        // Attach expected Options just like backend
+        if (nextNode) {
+            const nextRules = protocol.branchRules.filter(r => r.nodeId === nextNode.nodeId);
+            nextNode.expectedOptions = nextRules
+                .map(r => r.conditionValue)
+                .filter(v => v !== '*' && !v.includes('>') && !v.includes('<'));
+        }
+        return nextNode;
+    };
+    // ------------------------------------------------------------------
+
     // Initialization: Fetch latest protocol active version and start session
     useEffect(() => {
         const initSession = async () => {
             try {
-                // 1. Get the active version ID for this protocol
-                const { data: protocolData } = await api.get(`/protocols/${protocolId}`);
-                if (!protocolData.activeVersion) {
-                    setError('This protocol has no active/published version.');
-                    setLoading(false);
-                    return;
+                if (isOnline) {
+                    const { data: protocolData } = await api.get(`/protocols/${protocolId}`);
+                    if (!protocolData.activeVersion) {
+                        setError('This protocol has no active/published version.');
+                        setLoading(false);
+                        return;
+                    }
+                    const { data: sessionData } = await api.post('/triage/sessions', {
+                        versionId: protocolData.activeVersion._id
+                    });
+                    setSessionId(sessionData.session._id);
+                    setSession(sessionData.session);
+                    setCurrentNode(sessionData.nextNode);
+                } else {
+                    // Initialize OFFLINE Session
+                    const localProtocol = await getLocalProtocolById(protocolId);
+                    if (!localProtocol) {
+                        setError('Protocol not found in offline cache. Please reconnect to internet.');
+                        setLoading(false); return;
+                    }
+
+                    // Create mock session state
+                    const mockSession = {
+                        _id: 'local_' + Date.now(),
+                        protocolId: localProtocol._id,
+                        versionId: localProtocol.versionNumber || 'v_local',
+                        responses: [],
+                        finalPriority: 'Pending',
+                        totalScore: 0,
+                        offlineStartedAt: new Date().toISOString()
+                    };
+
+                    const rootNode = localProtocol.nodes.find(n => n.type !== 'terminal') || localProtocol.nodes[0];
+                    if (rootNode) {
+                        const nextRules = localProtocol.branchRules.filter(r => r.nodeId === rootNode.nodeId);
+                        rootNode.expectedOptions = nextRules
+                            .map(r => r.conditionValue)
+                            .filter(v => v !== '*' && !v.includes('>') && !v.includes('<'));
+                    }
+
+                    setSessionId(mockSession._id);
+                    setSession(mockSession);
+                    setCurrentNode(rootNode);
                 }
-
-                // 2. Start the Triage Session
-                const { data: sessionData } = await api.post('/triage/sessions', {
-                    versionId: protocolData.activeVersion._id
-                });
-
-                setSessionId(sessionData.session._id);
-                setSession(sessionData.session);
-                setCurrentNode(sessionData.nextNode);
-                setLoading(false);
             } catch (err) {
                 setError('Failed to initialize triage session.');
+            } finally {
                 setLoading(false);
             }
         };
 
         if (protocolId) initSession();
-    }, [protocolId]);
+    }, [protocolId, isOnline]);
 
     const isValidInput = (val) => {
         if (!val.trim()) return null;
@@ -80,19 +143,67 @@ const TriageRunner = () => {
         setError('');
 
         try {
-            const { data } = await api.post(`/triage/sessions/${sessionId}/respond`, {
-                nodeId: currentNode.nodeId,
-                responseValue: inputValue
-            });
+            if (isOnline) {
+                const { data } = await api.post(`/triage/sessions/${sessionId}/respond`, {
+                    nodeId: currentNode.nodeId,
+                    responseValue: inputValue
+                });
 
-            if (data.isComplete || data.defaultPriorityAssigned) {
-                setIsComplete(true);
-                setFinalResult(data);
-                setSession(data.session);
+                if (data.isComplete || data.defaultPriorityAssigned) {
+                    setIsComplete(true);
+                    setFinalResult(data);
+                    setSession(data.session);
+                } else {
+                    setCurrentNode(data.nextNode);
+                    setSession(data.session);
+                    setInputValue('');
+                }
             } else {
-                setCurrentNode(data.nextNode);
-                setSession(data.session);
-                setInputValue(''); // Reset input for next node
+                // OFFLINE Execution
+                const localProtocol = await getLocalProtocolById(protocolId);
+
+                const scoreApplied = currentNode.scoreValue || 0;
+                const newResponses = [...session.responses, {
+                    nodeId: currentNode.nodeId,
+                    responseValue: inputValue,
+                    scoreApplied
+                }];
+                const newTotalScore = newResponses.reduce((acc, res) => acc + res.scoreApplied, 0);
+
+                const newSessionState = {
+                    ...session,
+                    responses: newResponses,
+                    totalScore: newTotalScore
+                };
+
+                const nextNode = getNextNodeLocally(localProtocol, currentNode.nodeId, inputValue);
+
+                if (!nextNode) {
+                    // Dead end
+                    newSessionState.finalPriority = newTotalScore >= 15 ? 'Emergency' : newTotalScore >= 10 ? 'High' : newTotalScore >= 5 ? 'Medium' : 'Low';
+                    setSession(newSessionState);
+                    setFinalResult({ session: newSessionState, defaultPriorityAssigned: newSessionState.finalPriority });
+                    setIsComplete(true);
+                    await addToSyncQueue(newSessionState);
+                    updatePendingCount();
+                } else if (nextNode.type === 'terminal') {
+                    if (['Emergency', 'High', 'Medium', 'Low'].includes(nextNode.content)) {
+                        newSessionState.finalPriority = nextNode.content;
+                    } else {
+                        newSessionState.finalPriority = newTotalScore >= 15 ? 'Emergency' : newTotalScore >= 10 ? 'High' : newTotalScore >= 5 ? 'Medium' : 'Low';
+                    }
+                    setSession(newSessionState);
+                    setFinalResult({ session: newSessionState, terminalNode: nextNode });
+                    setIsComplete(true);
+
+                    // Add finished session to Sync Queue since we are offline
+                    await addToSyncQueue(newSessionState);
+                    updatePendingCount();
+                } else {
+                    setSession(newSessionState);
+                    setCurrentNode(nextNode);
+                    setInputValue('');
+                }
             }
         } catch (err) {
             setError(err.response?.data?.error || 'Failed to submit response');
@@ -106,12 +217,42 @@ const TriageRunner = () => {
         setLoading(true);
         setError('');
         try {
-            const { data } = await api.post(`/triage/sessions/${sessionId}/back`);
-            setSession(data.session);
-            setCurrentNode(data.nextNode);
-            setIsComplete(false);
-            setFinalResult(null);
-            setInputValue(''); // Reset input
+            if (isOnline) {
+                const { data } = await api.post(`/triage/sessions/${sessionId}/back`);
+                setSession(data.session);
+                setCurrentNode(data.nextNode);
+                setIsComplete(false);
+                setFinalResult(null);
+                setInputValue('');
+            } else {
+                // OFFLINE Undo Logic
+                const localProtocol = await getLocalProtocolById(protocolId);
+                const newResponses = [...session.responses];
+                const lastResponse = newResponses.pop();
+
+                const newScore = newResponses.reduce((acc, res) => acc + res.scoreApplied, 0);
+
+                const newSessionState = {
+                    ...session,
+                    responses: newResponses,
+                    totalScore: newScore,
+                    finalPriority: 'Pending'
+                };
+
+                const previousNode = localProtocol.nodes.find(n => n.nodeId === lastResponse.nodeId);
+                if (previousNode) {
+                    const nextRules = localProtocol.branchRules.filter(r => r.nodeId === previousNode.nodeId);
+                    previousNode.expectedOptions = nextRules
+                        .map(r => r.conditionValue)
+                        .filter(v => v !== '*' && !v.includes('>') && !v.includes('<'));
+                }
+
+                setSession(newSessionState);
+                setCurrentNode(previousNode);
+                setIsComplete(false);
+                setFinalResult(null);
+                setInputValue('');
+            }
         } catch (err) {
             setError(err.response?.data?.error || 'Failed to go back');
         } finally {
@@ -207,19 +348,19 @@ const TriageRunner = () => {
     return (
         <div className="min-h-[calc(100vh-80px)] w-full flex items-center justify-center p-4 sm:p-8 relative">
             {/* Ambient Background Glow */}
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[80vw] h-[80vw] max-w-3xl max-h-3xl rounded-full blur-[100px] opacity-[0.03] bg-teal-500 pointer-events-none"></div>
+            <div className={`absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[80vw] h-[80vw] max-w-3xl max-h-3xl rounded-full blur-[100px] opacity-[0.03] pointer-events-none ${!isOnline ? 'bg-orange-500' : 'bg-teal-500'}`}></div>
 
             <div className="max-w-3xl w-full bg-white rounded-[2rem] shadow-2xl overflow-hidden flex flex-col min-h-[550px] border border-slate-100 transition-all duration-300 transform relative z-10">
                 {/* Header */}
-                <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-8 text-white flex items-center justify-between border-b border-white/10 shadow-lg relative overflow-hidden">
+                <div className={`p-8 text-white flex items-center justify-between border-b border-white/10 shadow-lg relative overflow-hidden ${!isOnline ? 'bg-gradient-to-r from-orange-900 via-orange-800 to-orange-900' : 'bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900'}`}>
                     <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5"></div>
                     <div className="flex items-center relative z-10">
                         <div className="bg-white/10 p-3 rounded-2xl mr-4 backdrop-blur-md shadow-sm border border-white/20">
-                            <BrainCircuit size={32} className="text-teal-300" />
+                            {isOnline ? <BrainCircuit size={32} className="text-teal-300" /> : <WifiOff size={32} className="text-orange-300" />}
                         </div>
                         <div>
                             <h2 className="text-2xl font-bold tracking-tight">Active Evaluation</h2>
-                            <p className="text-slate-300 text-sm mt-1 font-medium tracking-wide opacity-90"><span className="w-1.5 h-1.5 rounded-full bg-teal-400 inline-block mr-2 animate-pulse"></span>Protocol AI Triage System</p>
+                            <p className="text-slate-300 text-sm mt-1 font-medium tracking-wide opacity-90"><span className={`w-1.5 h-1.5 rounded-full inline-block mr-2 animate-pulse ${isOnline ? 'bg-teal-400' : 'bg-orange-400'}`}></span>{isOnline ? 'Protocol AI Triage System' : 'Offline Triage Engine'}</p>
                         </div>
                     </div>
 

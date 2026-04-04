@@ -48,14 +48,8 @@ const CustomNode = ({ data, id }) => {
 
 const nodeTypes = { custom: CustomNode };
 
-const initialNodes = [
-    {
-        id: 'root',
-        type: 'input',
-        data: { label: 'Start Triage' },
-        position: { x: 250, y: 5 },
-    },
-];
+const initialNodes = [];
+
 
 const getId = () => `node_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
@@ -94,6 +88,20 @@ const ProtocolBuilder = () => {
     const [nodes, setNodes, onNodesChange] = useNodesState(getInitialNodes());
     const [edges, setEdges, onEdgesChange] = useEdgesState(getInitialEdges());
 
+    // Track nodes with no incoming edges (potential roots) for live visual feedback
+    const [orphanIds, setOrphanIds] = useState(new Set());
+
+    useEffect(() => {
+        const targetNodeIds = new Set(edges.map(e => e.target));
+        const candidates = nodes.filter(n => !targetNodeIds.has(n.id));
+        // Only flag as errors when there is more than 1 root candidate
+        if (candidates.length > 1) {
+            setOrphanIds(new Set(candidates.map(n => n.id)));
+        } else {
+            setOrphanIds(new Set()); // 0 or 1 root is fine
+        }
+    }, [nodes, edges]);
+
     const fetchProtocol = useCallback(async (forceBackend = false) => {
         const stored = localStorage.getItem(localKey);
         if (stored && !forceBackend) return; // Prefer local draft unless forced
@@ -104,7 +112,7 @@ const ProtocolBuilder = () => {
                 // Convert backend schema to React Flow schema
                 const loadedNodes = data.activeVersion.nodes.map(n => ({
                     id: n.nodeId,
-                    type: n.nodeId === 'root' ? 'input' : 'custom',
+                    type: 'custom',
                     position: n.position || { x: Math.random() * 400, y: Math.random() * 400 },
                     data: {
                         label: `${n.type.toUpperCase()}: ${n.content}`,
@@ -135,8 +143,9 @@ const ProtocolBuilder = () => {
                     setNodes(loadedNodes);
                     setEdges(loadedEdges);
                 }
-            } else if (forceBackend) { // Resetting to empty if no published version
-                setNodes(initialNodes);
+            } else if (forceBackend) {
+                // No published version — reset to blank canvas
+                setNodes([]);
                 setEdges([]);
             }
         } catch (error) {
@@ -222,12 +231,10 @@ const ProtocolBuilder = () => {
     }, [undo, redo]);
 
     const handleEditNode = useCallback((nodeId, nodeData) => {
-        if (nodeId === 'root') return; // Don't edit root
-
         setNodeModal({
             isOpen: true,
             mode: 'edit',
-            type: nodeData.rawType,
+            type: nodeData.rawType || 'start',
             position: null,
             id: nodeId,
             data: {
@@ -267,12 +274,21 @@ const ProtocolBuilder = () => {
             setNodes((nds) =>
                 nds.map((node) => {
                     if (node.id === nodeModal.id) {
+                        const isRoot = node.id === 'root';
                         node.data = {
                             ...node.data,
                             content: formData.content,
                             label: `${nodeModal.type.toUpperCase()}: ${formData.content}`,
                             scoreValue: formData.scoreValue,
-                            inputType: formData.inputType
+                            inputType: formData.inputType,
+                            // Keep the root node's green style intact
+                            style: isRoot ? {
+                                background: '#ffffff',
+                                border: '2px solid #0f172a',
+                                borderRadius: '8px',
+                                padding: '10px',
+                                width: 200,
+                            } : node.data.style
                         };
                     }
                     return node;
@@ -283,10 +299,6 @@ const ProtocolBuilder = () => {
     };
 
     const handleDeleteNode = useCallback((nodeId) => {
-        if (nodeId === 'root') {
-            alert("Cannot delete the root Start node.");
-            return;
-        }
         takeSnapshot();
         setNodes((nds) => nds.filter((node) => node.id !== nodeId));
         setEdges((eds) => eds.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
@@ -308,7 +320,7 @@ const ProtocolBuilder = () => {
     const handleEraseAll = useCallback(() => {
         if (window.confirm("Are you sure you want to clear the entire canvas? This cannot be fully undone if you refresh.")) {
             takeSnapshot();
-            setNodes(initialNodes);
+            setNodes([]);
             setEdges([]);
         }
     }, [takeSnapshot, setNodes, setEdges]);
@@ -390,12 +402,34 @@ const ProtocolBuilder = () => {
     const onSave = async () => {
         if (!reactFlowInstance) return;
 
-        // Transform ReactFlow state into CareTree Backend Schema
         const flow = reactFlowInstance.toObject();
 
-        const backendNodes = flow.nodes.map(n => ({
+        if (flow.nodes.length === 0) {
+            alert('Your canvas is empty. Drag at least one node onto the canvas before publishing.');
+            return;
+        }
+
+        // Auto-detect the starting node: the one with NO incoming edges
+        const targetNodeIds = new Set(flow.edges.map(e => e.target));
+        const rootCandidates = flow.nodes.filter(n => !targetNodeIds.has(n.id));
+
+        if (rootCandidates.length === 0) {
+            alert('Cannot detect a starting node. Make sure at least one node has no incoming connections (i.e., it is the entry point of the flowchart).');
+            return;
+        }
+
+        if (rootCandidates.length > 1) {
+            alert(`Error: ${rootCandidates.length} nodes have no incoming connections (highlighted in red on the canvas). A valid protocol must have exactly ONE starting node. Please connect the extra floating nodes before publishing.`);
+            return;
+        }
+
+        // Put root first so the backend picks it as the starting node
+        const rootNode = rootCandidates[0];
+        const orderedNodes = [rootNode, ...flow.nodes.filter(n => n.id !== rootNode.id)];
+
+        const backendNodes = orderedNodes.map(n => ({
             nodeId: n.id,
-            type: n.data.rawType || 'question', // fallback for root
+            type: n.data.rawType || 'question',
             content: n.data.content || n.data.label,
             scoreValue: n.data.scoreValue || 0,
             inputType: n.data.inputType || 'text',
@@ -420,6 +454,7 @@ const ProtocolBuilder = () => {
             alert('Failed to publish protocol');
         }
     };
+
 
     return (
         <div className="flex flex-col h-[800px] border border-slate-200 rounded-lg overflow-hidden bg-white">
@@ -532,7 +567,30 @@ const ProtocolBuilder = () => {
                 <div className="flex-1 h-full" ref={reactFlowWrapper}>
                     <ReactFlowProvider>
                         <ReactFlow
-                            nodes={nodes.map(n => n.type === 'custom' && n.data && !n.data.onEdit ? { ...n, data: { ...n.data, onEdit: handleEditNode } } : n)}
+                            nodes={nodes.map(n => {
+                                // Attach the onEdit handler if missing
+                                let updatedNode = n.type === 'custom' && n.data && !n.data.onEdit
+                                    ? { ...n, data: { ...n.data, onEdit: handleEditNode } }
+                                    : n;
+
+                                // Inject red error style for orphan nodes (multiple roots)
+                                if (orphanIds.has(n.id)) {
+                                    updatedNode = {
+                                        ...updatedNode,
+                                        data: {
+                                            ...updatedNode.data,
+                                            style: {
+                                                ...updatedNode.data.style,
+                                                border: '2.5px solid #ef4444',
+                                                background: '#fff1f2',
+                                                boxShadow: '0 0 0 3px rgba(239,68,68,0.25)',
+                                            }
+                                        }
+                                    };
+                                }
+
+                                return updatedNode;
+                            })}
                             edges={edges}
                             onNodesChange={onNodesChange}
                             onEdgesChange={onEdgesChange}
@@ -596,9 +654,14 @@ const ProtocolBuilder = () => {
                                 }}>
                                     <div className="px-6 py-5 border-b border-slate-100 bg-slate-50">
                                         <h3 className="text-xl font-bold text-slate-800">
-                                            {nodeModal.mode === 'add' ? 'Create New' : 'Edit'} {nodeModal.type.charAt(0).toUpperCase() + nodeModal.type.slice(1)} Node
+                                            {nodeModal.mode === 'add' ? 'Create New' : 'Edit'}{' '}
+                                            {nodeModal.type === 'start' ? '🟢 Start Triage Node' : nodeModal.type.charAt(0).toUpperCase() + nodeModal.type.slice(1) + ' Node'}
                                         </h3>
-                                        <p className="text-sm text-slate-500 mt-1">Configure the node's content and patient input requirements.</p>
+                                        <p className="text-sm text-slate-500 mt-1">
+                                            {nodeModal.type === 'start'
+                                                ? 'Edit the label shown at the beginning of this triage protocol.'
+                                                : "Configure the node's content and patient input requirements."}
+                                        </p>
                                     </div>
                                     <div className="p-6 space-y-5 flex-1">
                                         <div>
