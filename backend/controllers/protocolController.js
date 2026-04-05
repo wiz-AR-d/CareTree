@@ -1,5 +1,6 @@
 const Protocol = require('../models/Protocol');
 const ProtocolVersion = require('../models/ProtocolVersion');
+const TriageSession = require('../models/TriageSession');
 
 // @desc    Create a new protocol
 // @route   POST /api/protocols
@@ -120,6 +121,40 @@ exports.getVersion = async (req, res) => {
         }
 
         res.json(version);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// @desc    Delete a protocol and all associated versions/sessions
+// @route   DELETE /api/protocols/:id
+// @access  Private/Doctor
+exports.deleteProtocol = async (req, res) => {
+    try {
+        const protocolId = req.params.id;
+        const protocol = await Protocol.findById(protocolId);
+
+        if (!protocol) {
+            return res.status(404).json({ error: 'Protocol not found' });
+        }
+
+        // Make sure only the creator can delete it, or allow any doctor for this MVP
+        if (protocol.createdBy.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Not authorized to delete this protocol' });
+        }
+
+        // 1. Delete all versions
+        const versions = await ProtocolVersion.find({ protocolId });
+        const versionIds = versions.map(v => v._id);
+        await ProtocolVersion.deleteMany({ protocolId });
+
+        // 2. Delete all sessions that used those versions
+        await TriageSession.deleteMany({ versionId: { $in: versionIds } });
+
+        // 3. Delete protocol itself
+        await protocol.deleteOne();
+
+        res.json({ message: 'Protocol removed' });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

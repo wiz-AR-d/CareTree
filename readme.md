@@ -139,7 +139,8 @@ Doctors can adapt triage logic in minutes instead of redesigning static manuals.
 - Clear urgency classification output  
 - Structured recommendations at terminal nodes  
 - Reduced need to manually interpret flowcharts  
-- Offline functionality during network loss  
+- **Offline Functionality:** Progressive Web App (PWA) caching and IndexedDB offline logic.
+- **Background Sync:** Queues offline submissions and bulk-syncs when internet is restored.
 
 Instead of searching through complex charts, nurses are simply guided to the next logical question automatically.
 

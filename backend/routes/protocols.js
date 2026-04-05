@@ -6,6 +6,7 @@ const {
     getProtocolById,
     publishVersion,
     getVersion,
+    deleteProtocol,
 } = require('../controllers/protocolController');
 
 const { protect } = require('../middleware/auth');
@@ -16,6 +17,7 @@ const { authorize } = require('../middleware/roleCheck');
 // -----------------------------------
 router.post('/', protect, authorize('doctor'), createProtocol);
 router.post('/:id/versions', protect, authorize('doctor'), publishVersion);
+router.delete('/:id', protect, authorize('doctor'), deleteProtocol);
 
 // -----------------------------------
 // Shared Routes (Read)

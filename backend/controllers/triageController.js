@@ -2,6 +2,17 @@ const TriageSession = require('../models/TriageSession');
 const ProtocolVersion = require('../models/ProtocolVersion');
 const { getNextNode, calculateScore, classifyPriority } = require('../utils/decisionEngine');
 
+// Helper to attach metadata to a node before sending to frontend
+const attachNodeMetadata = (nodeDoc, versionDoc) => {
+    if (!nodeDoc) return null;
+    const nodeObj = nodeDoc.toObject ? nodeDoc.toObject() : nodeDoc;
+    const nextRules = versionDoc.branchRules.filter(r => r.nodeId === nodeObj.nodeId);
+    nodeObj.expectedOptions = nextRules
+        .map(r => r.conditionValue)
+        .filter(v => v !== '*' && !v.includes('>') && !v.includes('<')); // Simple exact choices
+    return nodeObj;
+};
+
 // @desc    Start a new triage session
 // @route   POST /api/triage/sessions
 // @access  Private/Nurse
@@ -28,7 +39,7 @@ exports.startSession = async (req, res) => {
 
         res.status(201).json({
             session,
-            nextNode: rootNode
+            nextNode: attachNodeMetadata(rootNode, version)
         });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -96,10 +107,49 @@ exports.submitResponse = async (req, res) => {
         await session.save();
         return res.json({
             session,
-            nextNode,
+            nextNode: attachNodeMetadata(nextNode, version),
             isComplete: false
         });
 
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// @desc    Go back to the previous node by popping the last response
+// @route   POST /api/triage/sessions/:id/back
+// @access  Private/Nurse
+exports.goBack = async (req, res) => {
+    try {
+        const session = await TriageSession.findById(req.params.id);
+
+        if (!session) return res.status(404).json({ error: 'Session not found' });
+        if (session.responses.length === 0) {
+            return res.status(400).json({ error: 'Cannot go back further' });
+        }
+
+        const version = await ProtocolVersion.findById(session.versionId);
+        if (!version) return res.status(404).json({ error: 'Protocol version not found' });
+
+        // Pop the last response which corresponds to the previous question
+        const lastResponse = session.responses.pop();
+
+        // Re-calculate the score
+        session.totalScore = calculateScore(session.responses);
+
+        // Ensure session is marked as Pending since we are active again
+        session.finalPriority = 'Pending';
+
+        await session.save();
+
+        // The node we want to return to is the one that was just popped
+        const previousNode = version.nodes.find(n => n.nodeId === lastResponse.nodeId);
+
+        return res.json({
+            session,
+            nextNode: attachNodeMetadata(previousNode, version),
+            isComplete: false
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -132,6 +182,38 @@ exports.getActiveSessions = async (req, res) => {
             .sort({ createdAt: -1 });
 
         res.json(sessions);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// @desc    Bulk sync offline sessions
+// @route   POST /api/triage/sessions/bulk
+// @access  Private/Nurse
+exports.bulkSync = async (req, res) => {
+    try {
+        const { sessions } = req.body;
+
+        if (!Array.isArray(sessions)) {
+            return res.status(400).json({ error: 'Sessions must be an array' });
+        }
+
+        const formattedSessions = sessions.map(session => ({
+            nurseId: req.user._id,
+            versionId: session.versionId,
+            responses: session.responses || [],
+            finalPriority: session.finalPriority || 'Pending',
+            totalScore: session.totalScore || 0,
+            synced: true,
+            createdAt: session.startTime || new Date(),
+        }));
+
+        const result = await TriageSession.insertMany(formattedSessions);
+
+        res.status(201).json({
+            message: `Successfully synced ${result.length} sessions`,
+            syncedCount: result.length
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

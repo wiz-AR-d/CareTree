@@ -8,6 +8,11 @@ const nodeSchema = new mongoose.Schema({
         required: true
     },
     content: { type: String, required: true }, // The question text or terminal priority
+    inputType: {
+        type: String,
+        enum: ['text', 'number', 'boolean', 'choice'],
+        default: 'text'
+    },
     scoreValue: { type: Number, default: 0 },
     position: {
         x: { type: Number, default: 0 },
