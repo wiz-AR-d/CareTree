@@ -2,7 +2,7 @@
 
 ## One-line Project Description
 
-An offline-syncable, rule-based triage framework that enables doctors to visually design customizable decision-tree protocols and empowers nurses with step-by-step guided triage execution, enhanced by NLP-assisted symptom extraction.
+An offline-syncable, rule-based triage framework that enables doctors to visually design customizable decision-tree protocols and empowers nurses with step-by-step guided triage execution, enhanced by NLP & ML-assisted symptom extraction.
 
 ---
 
@@ -77,7 +77,7 @@ Our approach focuses on:
 1. Designing a configurable rule-based decision engine instead of hardcoded logic  
 2. Separating Doctor Protocol Design Mode from Nurse Execution Mode  
 3. Implementing an offline-syncable web architecture  
-4. Enhancing usability with NLP-assisted symptom extraction  
+4. Enhancing usability with NLP & ML-assisted symptom extraction  
 5. Maintaining deterministic, explainable triage logic  
 
 The system prioritizes usability, modularity, and reliability.
@@ -160,7 +160,7 @@ This reduces:
 Design Flowchart → Define Logic → Assign Scores → Publish Protocol → Automatic Sync to Nurse Devices  
 
 ### Nurse Workflow  
-Select Protocol → Enter Patient Data → Follow Guided Questions → View Clear Priority & Recommendation → Log Session → Auto-Sync  
+Type Symptoms → Select Protocol → Enter Patient Data → Follow Guided Questions → View Clear Priority & Recommendation → Log Session → Auto-Sync  
 
 ---
 
@@ -180,7 +180,7 @@ The system follows a layered, cloud-synchronized architecture:
 
 ### 2️⃣ Application Layer  
 - Deterministic Decision Engine (State Machine)  
-- NLP Symptom Extraction Module  
+- NLP + ML Symptom Extraction Module  
 - Offline Sync Manager  
 
 ### 3️⃣ Data Layer  
@@ -499,8 +499,8 @@ CareTree is built using a modern full-stack web architecture designed for modula
 
 ## Deployment  
 
-- **Frontend Deployment:** Vercel / Netlify  
-- **Backend Deployment:** Render / Railway / AWS EC2  
+- **Frontend Deployment:** Vercel  
+- **Backend Deployment:** Render   
 - **Database Hosting:** MongoDB Atlas  
 - **Environment Management:** dotenv  
 
@@ -566,12 +566,13 @@ Uploads locally stored sessions once connectivity is restored.
 
 ## Checkpoint 4: Model Training  
 **Deliverables:**
-- Synthetic dataset generation  
-- NLP extraction pipeline  
+- Data Scraping
+- NLP extraction pipeline
+- Model Training  
 
 ## Checkpoint 5: Model Integration  
 **Deliverables:**
-- NLP module integration with decision engine  
+- NLP & ML model integration on Nurse led patient input  
 - Confirmation UI for extracted symptoms  
 
 ## Checkpoint 6: Deployment  
@@ -587,21 +588,23 @@ Uploads locally stored sessions once connectivity is restored.
 1. Doctor logs into CareTree and creates or updates a triage protocol.  
 2. Protocol is versioned and stored in the cloud.  
 3. Nurse device syncs the latest protocol version automatically.  
-4. Nurse selects protocol and enters patient symptoms (structured or free-text).  
-5. NLP module extracts structured symptom data.  
-6. Decision engine navigates the flowchart dynamically.  
-7. Risk score is calculated deterministically.  
-8. Urgency classification and recommended action are displayed.  
-9. Session is stored locally if offline.  
-10. Data is synchronized automatically when internet reconnects.  
+4. Nurse enters patient symptom(s) (structured or free-text).  
+5. NLP module extracts structured symptom data.
+6. ML model finds relevant protocols matching to the symptoms.
+7. Nurse selects from relevant protocols and runs/starts the process.  
+8. Decision engine navigates the flowchart dynamically.  
+9. Risk score is calculated deterministically.  
+10. Urgency classification and recommended action are displayed.  
+11. Session is stored locally if offline.  
+12. Data is synchronized automatically when internet reconnects.  
 
 ---
 
 # 12. Demo & Video  
 
-- **Live Demo Link:**  
+- **Live Demo Link:**  https://caretree-tau.vercel.app/
 - **Demo Video Link:**  
-- **GitHub Repository:**  
+- **GitHub Repository:**  https://github.com/wiz-AR-d/CareTree
 
 ---
 
@@ -619,9 +622,9 @@ Uploads locally stored sessions once connectivity is restored.
 
 | Member Name | Role | Responsibilities |
 |-------------|------|-----------------|
-| Arkapravo Rajkonwar | System Architect | Architecture & Backend |
-| Rishi Seth | System Architect + Frontend Developer | Backend & UI Development |
-| Vinayak Mohakud | ML Engineer + Frontend Developer | NLP Module & UI Development |
+| Arkapravo Rajkonwar | Planner, System Architect, Developer & QA Engineer | Planning, Architecture, Development & QA Testing + Engineering|
+| Rishi Seth | Planner, Backend Developer & Tester | Planning, Backend Development & Testing |
+| Vinayak Mohakud | ML Engineer + Frontend Developer | NLP, ML model training & development and UI Development |
 
 ---
 
@@ -629,14 +632,15 @@ Uploads locally stored sessions once connectivity is restored.
 
 ## Short-Term  
 
-- Multi-language symptom extraction  
-- Improved NLP accuracy  
-- Analytics dashboard for supervisors  
+- OCR-Based Medical Flowchart Import
+
+One of the most impactful planned additions is OCR (Optical Character Recognition) scanning of pre-existing medical flowcharts. This feature will allow doctors and clinical assistants to simply photograph or upload a physical or digital flowchart — such as a treatment algorithm, triage pathway, or care protocol — and have it automatically parsed and converted into a structured, interactive protocol within CareTree.
+
+This significantly lowers the barrier to adoption: rather than manually recreating complex decision trees from scratch, healthcare teams can digitise their existing standardised workflows in seconds. Since most hospitals and clinics already operate with well-established paper or PDF-based flowcharts, this bridge between legacy resources and our digital platform ensures that onboarding onto CareTree requires minimal additional effort. It enables teams to ship their institutional knowledge directly into the app — making the transition seamless, faster, and more accurate. 
 
 ## Long-Term  
 
-- ML-based risk calibration  
-- Regional triage protocol templates  
+- ML-based risk calibration   
 - Public health trend detection  
 - Standalone exportable runtime package  
 
@@ -644,10 +648,7 @@ Uploads locally stored sessions once connectivity is restored.
 
 # 16. Known Limitations  
 
-- NLP module trained on synthetic dataset  
-- Requires initial internet connection for protocol synchronization  
-- Not a diagnostic system  
-- Decision quality depends on protocol design  
+- Requires a first time internet connection for protocol synchronization  
 
 ---
 
