@@ -2,18 +2,26 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { HeartPulse } from 'lucide-react';
+import { GoogleLogin } from '@react-oauth/google';
 
 const Register = () => {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [role, setRole] = useState('doctor');
-    const { register, isLoading, error } = useAuthStore();
+    const { register, googleAuth, isLoading, error } = useAuthStore();
     const navigate = useNavigate();
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         const success = await register(name, email, password, role);
+        if (success) {
+            navigate('/dashboard');
+        }
+    };
+
+    const handleGoogleSubmit = async (credentialResponse) => {
+        const success = await googleAuth(credentialResponse.credential, role);
         if (success) {
             navigate('/dashboard');
         }
@@ -104,6 +112,18 @@ const Register = () => {
                             </button>
                         </div>
                     </form>
+
+                    <div className="mt-8 border-t border-slate-200 pt-6">
+                        <p className="text-center text-sm font-medium text-slate-700 mb-4">Ensure your role is selected, then sign up instantly:</p>
+                        <div className="flex justify-center">
+                            <GoogleLogin
+                                onSuccess={handleGoogleSubmit}
+                                onError={() => {
+                                    console.log('Google Signup Failed');
+                                }}
+                            />
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

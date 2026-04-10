@@ -1,5 +1,7 @@
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
+const crypto = require('crypto');
 
 // Generate JWT Helper
 const generateToken = (id) => {
@@ -74,5 +76,53 @@ exports.login = async (req, res) => {
         }
     } catch (error) {
         res.status(500).json({ error: error.message });
+    }
+};
+
+// @desc    Authenticate with Google
+// @route   POST /api/auth/google
+// @access  Public
+exports.googleAuth = async (req, res) => {
+    const { googleToken, role } = req.body;
+    try {
+        const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+        const ticket = await client.verifyIdToken({
+            idToken: googleToken,
+            audience: process.env.GOOGLE_CLIENT_ID,
+        });
+
+        const payload = ticket.getPayload();
+        const { email, name } = payload;
+
+        let user = await User.findOne({ email });
+
+        if (!user) {
+            // New Google User - create an account
+            if (!['doctor', 'nurse'].includes(role)) {
+                return res.status(400).json({ error: 'Invalid role. Must be doctor or nurse.' });
+            }
+            
+            // Random password for google users to satisfy schema requirements
+            const password = crypto.randomBytes(16).toString('hex');
+            
+            user = await User.create({
+                name,
+                email,
+                password,
+                role,
+            });
+        }
+
+        res.json({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            token: generateToken(user._id),
+        });
+
+    } catch (error) {
+        console.error('Google Auth Error:', error);
+        res.status(500).json({ error: 'Google authentication failed' });
     }
 };
